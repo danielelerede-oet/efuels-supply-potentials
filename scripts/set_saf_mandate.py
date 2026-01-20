@@ -13,15 +13,24 @@ from scripts._helper import mock_snakemake, update_config_from_wildcards, create
 logger = create_logger(__name__)
 
 
-def add_ekerosene_buses(n):
+def add_ekerosene_buses(n, config_file=None):
     """
-        Adds e-kerosene buses and stores, and adds links between e-kerosene and oil bus
+    Adds e-kerosene buses, carrier and stores.
+    Allows e-kerosene to oil backflow ONLY if not pre-OB3.
     """
-    # get oil bus names
-    oil_buses = n.buses.query("carrier in 'oil'")
 
-    # add e-kerosene bus
-    ekerosene_buses = [x.replace("oil", "e-kerosene") for x in oil_buses.index]
+    pre_ob3 = (
+        config_file.get("policies", {})
+        .get("pre_ob3_tax_credits", False)
+        if config_file is not None
+        else False
+    )
+
+    # Oil buses
+    oil_buses = n.buses.query("carrier == 'oil'")
+
+    # e-kerosene buses
+    ekerosene_buses = [b.replace("oil", "e-kerosene") for b in oil_buses.index]
     n.madd(
         "Bus",
         ekerosene_buses,
@@ -29,60 +38,38 @@ def add_ekerosene_buses(n):
         carrier="e-kerosene",
     )
 
-    # add e-kerosene carrier
-    n.add("Carrier", "e-kerosene", co2_emissions=n.carriers.loc["oil", "co2_emissions"])
+    # Carrier
+    if "e-kerosene" not in n.carriers.index:
+        n.add(
+            "Carrier",
+            "e-kerosene",
+            co2_emissions=n.carriers.loc["oil", "co2_emissions"],
+        )
 
     # add e-kerosene stores
     n.madd(
         "Store",
-        [ekerosene_bus + " Store" for ekerosene_bus in ekerosene_buses],
-        bus=ekerosene_buses,
+        [b + " Store" for b in ekerosene_buses],
+        bus=ekerosenfe_buses,
         e_nom_extendable=True,
         e_cyclic=True,
         carrier="e-kerosene",
     )
-    logger.info("Added E-kerosene buses, carrier, and stores")
 
-    # add links between E-kerosene and Oil buses so excess synthetic oil can be used
-    n.madd(
-        "Link",
-        [x + "-to-oil" for x in ekerosene_buses],
-        bus0=ekerosene_buses,
-        bus1=oil_buses.index,
-        carrier="e-kerosene-to-oil",
-        p_nom_extendable=True,
-        efficiency=1.0,
-    )
-    logger.info("Added links between E-kerosene and Oil buses")
-
-    # link all e-kerosene buses with E-kerosene-main bus if set in config
-    if snakemake.params.non_spatial_ekerosene:
-        ekerosene_main_bus = ["E-kerosene-main"]
-        n.madd(
-            "Bus",
-            ekerosene_main_bus,
-            location="E-kerosene-main",
-            carrier="e-kerosene-main",
-        )
+    # Allow dumping (only if pre_ob3_tax_credits: False)
+    if not pre_ob3:
         n.madd(
             "Link",
-            [x + "-to-main" for x in ekerosene_buses],
+            [b + "-to-oil" for b in ekerosene_buses],
             bus0=ekerosene_buses,
-            bus1=ekerosene_main_bus,
-            carrier="e-kerosene-to-main",
+            bus1=oil_buses.index,
+            carrier="e-kerosene-to-oil",
             p_nom_extendable=True,
             efficiency=1.0,
         )
-        n.madd(
-            "Link",
-            [x.replace("e-kerosene", "main-to-e-kerosene") for x in ekerosene_buses],
-            bus0=ekerosene_main_bus,
-            bus1=ekerosene_buses,
-            carrier="main-to-e-kerosene",
-            p_nom_extendable=True,
-            efficiency=1.0,
-        )
-        logger.info("Added links between E-kerosene buses and E-kerosene main bus")
+        logger.info("Added e-kerosene to oil backflow")
+    else:
+        logger.info("Pre-OB3: e-kerosene dumping to oil disabled")
 
 
 def reroute_FT_output(n):
@@ -157,7 +144,7 @@ if __name__ == "__main__":
     n = load_network(snakemake.input.network)
 
     # add e-kerosene buses with store, and connect e-kerosene and oil buses
-    add_ekerosene_buses(n)
+    add_ekerosene_buses(n, config_file=config)
 
     # reroute FT from oil buses to e-kerosene buses
     reroute_FT_output(n)
