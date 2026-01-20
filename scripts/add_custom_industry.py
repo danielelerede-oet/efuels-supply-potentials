@@ -782,10 +782,14 @@ def split_biogenic_CO2(n):
 
 def define_grid_H2(n):
     """
-        Marks output of electrolysis as grid H2 and connects only grid H2 to Fischer-Tropsch
+    Marks output of electrolysis as grid H2 and connects only grid H2 to Fischer-Tropsch.
+    Grid H2 to H2 connection is kept as a last-resort, but penalized to avoid
+    systematic dumping and overproduction.
     """
+
     # add grid H2 carrier
-    n.add("Carrier", "grid H2")
+    if "grid H2" not in n.carriers.index:
+        n.add("Carrier", "grid H2")
 
     # add grid H2 buses
     h2_buses = n.buses.query("carrier in 'H2'")
@@ -801,18 +805,33 @@ def define_grid_H2(n):
     logger.info("Added grid H2 carrier and buses")
 
     # get electrolyzers
-    electrolysis_carriers = ["Alkaline electrolyzer large", "PEM electrolyzer", "SOEC"]
+    electrolysis_carriers = [
+        "Alkaline electrolyzer large",
+        "PEM electrolyzer",
+        "SOEC",
+    ]
     electrolyzers = n.links.query("carrier in @electrolysis_carriers")
 
     # reroute output of electrolyzers from H2 to grid H2
-    n.links.loc[electrolyzers.index, "bus1"] = n.links.loc[electrolyzers.index, "bus1"].str.replace("H2", "grid H2")
-    logger.info(f"Rerouted output of {electrolyzers.carrier.unique()} from 'H2' buses to 'grid H2' buses")
+    n.links.loc[electrolyzers.index, "bus1"] = (
+        n.links.loc[electrolyzers.index, "bus1"]
+        .str.replace("H2", "grid H2")
+    )
+    logger.info(
+        f"Rerouted output of {electrolyzers.carrier.unique()} "
+        "from 'H2' buses to 'grid H2' buses"
+    )
 
     # make sure Fischer-Tropsch uses grid H2 instead of H2
     ft_carrier = "Fischer-Tropsch"
     ft_links = n.links.query("carrier in @ft_carrier").index
-    n.links.loc[ft_links, "bus0"] = n.links.loc[ft_links, "bus0"].str.replace("H2", "grid H2")
-    logger.info(f"Rerouted input of {ft_carrier} from 'H2' buses to 'grid H2' buses")
+    n.links.loc[ft_links, "bus0"] = (
+        n.links.loc[ft_links, "bus0"]
+        .str.replace("H2", "grid H2")
+    )
+    logger.info(
+        f"Rerouted input of {ft_carrier} from 'H2' buses to 'grid H2' buses"
+    )
 
     # add H2 Store Tank for grid H2
     h2_store_tanks = n.stores.query("carrier in 'H2 Store Tank'")
@@ -828,7 +847,7 @@ def define_grid_H2(n):
     )
     logger.info("Added grid H2 Store Tank for grid H2")
 
-    # connect grid H2 buses to H2 buses so H2 can be supplied
+    # connect grid H2 buses to H2 buses so H2 can be supplied (dumping / slack)
     n.madd(
         "Link",
         grid_h2_buses,
@@ -836,13 +855,18 @@ def define_grid_H2(n):
         bus1=h2_buses.index,
         p_nom_extendable=True,
         carrier="grid H2",
-        efficiency=1,
-        capital_cost=0,
+        efficiency=1.0,
+        capital_cost=0.0,
     )
     logger.info("Added links to connect grid H2 to H2")
 
-    # add transport network for grid H2
+    # penalize grid H2 -> H2 dumping so it acts as last-resort slack
+    n.links.loc[
+        n.links.carrier == "grid H2",
+        "marginal_cost"
+    ] = 1e6  # USD/MWh (order-of-magnitude penalty)
 
+    # add transport network for grid H2
     if "pipelines" in snakemake.input:
         pipelines_df = pd.read_csv(snakemake.input.pipelines)
 
@@ -854,7 +878,12 @@ def define_grid_H2(n):
         )
 
         grid_h2_links = pipelines_df.groupby("buses_idx").agg(
-            {"bus0": "first", "bus1": "first", "length": "mean", "capacity": "sum"}
+            {
+                "bus0": "first",
+                "bus1": "first",
+                "length": "mean",
+                "capacity": "sum",
+            }
         )
 
         n.madd(
@@ -864,7 +893,7 @@ def define_grid_H2(n):
             bus1=grid_h2_links.bus1.values + " grid H2",
             p_min_pu=-1,
             p_nom_extendable=True,
-            p_nom_max=grid_h2_links.capacity.values,  # opzionale
+            p_nom_max=grid_h2_links.capacity.values,
             length=grid_h2_links.length.values,
             capital_cost=costs.at["H2 (g) pipeline", "fixed"]
             * grid_h2_links.length.values,

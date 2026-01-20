@@ -15,8 +15,10 @@ logger = create_logger(__name__)
 
 def add_ekerosene_buses(n):
     """
-        Adds e-kerosene buses and stores, and adds links between e-kerosene and oil bus
+    Adds e-kerosene buses and stores, and adds links between e-kerosene and oil bus.
+    E-kerosene dumping to oil is allowed but penalized to avoid systematic overproduction.
     """
+
     # get oil bus names
     oil_buses = n.buses.query("carrier in 'oil'")
 
@@ -30,7 +32,12 @@ def add_ekerosene_buses(n):
     )
 
     # add e-kerosene carrier
-    n.add("Carrier", "e-kerosene", co2_emissions=n.carriers.loc["oil", "co2_emissions"])
+    if "e-kerosene" not in n.carriers.index:
+        n.add(
+            "Carrier",
+            "e-kerosene",
+            co2_emissions=n.carriers.loc["oil", "co2_emissions"],
+        )
 
     # add e-kerosene stores
     n.madd(
@@ -43,7 +50,7 @@ def add_ekerosene_buses(n):
     )
     logger.info("Added E-kerosene buses, carrier, and stores")
 
-    # add links between E-kerosene and Oil buses so excess synthetic oil can be used
+    # add links between e-kerosene and oil buses (dumping / slack)
     n.madd(
         "Link",
         [x + "-to-oil" for x in ekerosene_buses],
@@ -54,6 +61,12 @@ def add_ekerosene_buses(n):
         efficiency=1.0,
     )
     logger.info("Added links between E-kerosene and Oil buses")
+
+    # penalize e-kerosene dumping to oil
+    n.links.loc[
+        n.links.carrier == "e-kerosene-to-oil",
+        "marginal_cost"
+    ] = 1e6  # USD/MWh, order-of-magnitude penalty
 
     # link all e-kerosene buses with E-kerosene-main bus if set in config
     if snakemake.params.non_spatial_ekerosene:
@@ -73,6 +86,7 @@ def add_ekerosene_buses(n):
             p_nom_extendable=True,
             efficiency=1.0,
         )
+
         n.madd(
             "Link",
             [x.replace("e-kerosene", "main-to-e-kerosene") for x in ekerosene_buses],
@@ -82,7 +96,14 @@ def add_ekerosene_buses(n):
             p_nom_extendable=True,
             efficiency=1.0,
         )
-        logger.info("Added links between E-kerosene buses and E-kerosene main bus")
+
+        # penalize circulation via main bus (same logic as dumping)
+        n.links.loc[
+            n.links.carrier.isin(["e-kerosene-to-main", "main-to-e-kerosene"]),
+            "marginal_cost"
+        ] = 1e6
+
+        logger.info("Added links between e-kerosene buses and e-kerosene main bus")
 
 
 def reroute_FT_output(n):
