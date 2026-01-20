@@ -860,7 +860,7 @@ def define_grid_H2(n):
     )
     logger.info("Added links to connect grid H2 to H2")
 
-    # penalize grid H2 -> H2 dumping so it acts as last-resort slack
+    # penalize grid H2 to H2 dumping so it acts as last-resort slack
     n.links.loc[
         n.links.carrier == "grid H2",
         "marginal_cost"
