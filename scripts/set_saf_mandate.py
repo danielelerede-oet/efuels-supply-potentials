@@ -50,7 +50,7 @@ def add_ekerosene_buses(n, config_file=None):
     n.madd(
         "Store",
         [b + " Store" for b in ekerosene_buses],
-        bus=ekerosenfe_buses,
+        bus=ekerosene_buses,
         e_nom_extendable=True,
         e_cyclic=True,
         carrier="e-kerosene",
