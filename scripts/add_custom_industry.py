@@ -860,11 +860,6 @@ def define_grid_H2(n):
     )
     logger.info("Added links to connect grid H2 to H2")
 
-    # penalize grid H2 to H2 dumping so it acts as last-resort slack
-    n.links.loc[
-        n.links.carrier == "grid H2",
-        "marginal_cost"
-    ] = 1e6  # USD/MWh (order-of-magnitude penalty)
 
     # add transport network for grid H2
     if "pipelines" in snakemake.input:
@@ -902,6 +897,82 @@ def define_grid_H2(n):
         )
 
         logger.info("Added separate grid H2 pipeline network")
+
+def apply_ekerosene_dumping_penalty_from_credits(n):
+    """
+    Calibrate the marginal cost of e-kerosene dumping (e-kerosene-to-oil)
+    so that producing hydrogen only to capture electrolyzer tax credits
+    and dumping the resulting e-kerosene is never profitable.
+
+    A single penalty is applied, chosen as the maximum required to close
+    all possible arbitrage loops across subsidized electrolyzer technologies.
+    """
+
+    # Electrolyzer carriers potentially receiving tax credits
+    electrolysis_carriers = [
+        "Alkaline electrolyzer large",
+        "PEM electrolyzer",
+        "SOEC",
+    ]
+
+    el = n.links[n.links.carrier.isin(electrolysis_carriers)]
+    if el.empty:
+        logger.info("No electrolyzers found – skipping e-kerosene dumping penalty")
+        return
+
+    # Keep only electrolyzers with negative marginal cost (i.e. subsidized)
+    el_sub = el[el.marginal_cost < 0]
+    if el_sub.empty:
+        logger.info("No subsidized electrolyzers found – no dumping penalty needed")
+        return
+
+    # Retrieve Fischer-Tropsch efficiency (MWh_e-ker / MWh_H2)
+    ft = n.links[n.links.carrier == "Fischer-Tropsch"]
+    if ft.empty:
+        logger.info("No Fischer-Tropsch found – cannot calibrate e-kerosene dumping")
+        return
+
+    eta_ft = ft.iloc[0].efficiency
+    if eta_ft <= 0:
+        raise ValueError("Invalid Fischer-Tropsch efficiency")
+
+    penalties = []
+
+    for name, row in el_sub.iterrows():
+        credit_el = -row.marginal_cost          # EUR/MWh_el
+        eta_el = abs(row.efficiency)            # MWh_H2 / MWh_el
+
+        if eta_el <= 0:
+            raise ValueError(
+                f"Invalid efficiency for electrolyzer {name}"
+            )
+
+        # Required penalty to close the arbitrage loop for this technology
+        # EUR/MWh_e-kerosene
+        penalty = credit_el / eta_el / eta_ft
+        penalties.append(penalty)
+
+        logger.debug(
+            f"[Dumping penalty candidate] {name}: "
+            f"credit_el={credit_el:.2f}, "
+            f"eta_el={eta_el:.3f}, "
+            f"eta_ft={eta_ft:.3f} → "
+            f"penalty={penalty:.2f} EUR/MWh_e-ker"
+        )
+
+    # Conservative choice: maximum penalty closes all arbitrage loops
+    penalty_eker = max(penalties)
+
+    logger.info(
+        f"Applying e-kerosene dumping penalty: "
+        f"{penalty_eker:.2f} EUR/MWh_e-kerosene "
+        f"(max across subsidized electrolyzers)"
+    )
+
+    # Apply penalty to dumping link
+    mask = n.links.carrier == "e-kerosene-to-oil"
+    n.links.loc[mask, "marginal_cost"] = penalty_eker
+
 
 def add_other_electricity(n):
     """
@@ -1327,6 +1398,8 @@ if __name__ == "__main__":
     # define electrolysis output as grid H2 to be used in Fischer-Tropsch
     if snakemake.params.grid_h2:
         define_grid_H2(n)
+        # close IRA arbitrage loop induced by electrolyzer credits
+        apply_ekerosene_dumping_penalty_from_credits(n)
 
     # add other electricity load
     if snakemake.params.other_electricity:

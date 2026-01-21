@@ -50,7 +50,7 @@ def add_ekerosene_buses(n):
     )
     logger.info("Added E-kerosene buses, carrier, and stores")
 
-    # add links between e-kerosene and oil buses (dumping / slack)
+    # add links between e-kerosene and oil buses (dumping)
     n.madd(
         "Link",
         [x + "-to-oil" for x in ekerosene_buses],
@@ -60,13 +60,7 @@ def add_ekerosene_buses(n):
         p_nom_extendable=True,
         efficiency=1.0,
     )
-    logger.info("Added links between E-kerosene and Oil buses")
-
-    # penalize e-kerosene dumping to oil
-    n.links.loc[
-        n.links.carrier == "e-kerosene-to-oil",
-        "marginal_cost"
-    ] = 1e6  # USD/MWh, order-of-magnitude penalty
+    logger.info("Added links between e-kerosene and oil buses")
 
     # link all e-kerosene buses with E-kerosene-main bus if set in config
     if snakemake.params.non_spatial_ekerosene:
@@ -96,12 +90,6 @@ def add_ekerosene_buses(n):
             p_nom_extendable=True,
             efficiency=1.0,
         )
-
-        # penalize circulation via main bus (same logic as dumping)
-        n.links.loc[
-            n.links.carrier.isin(["e-kerosene-to-main", "main-to-e-kerosene"]),
-            "marginal_cost"
-        ] = 1e6
 
         logger.info("Added links between e-kerosene buses and e-kerosene main bus")
 
