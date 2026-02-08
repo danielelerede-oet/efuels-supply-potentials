@@ -992,19 +992,17 @@ def add_CCL_constraints(n, config):
         )
         return
 
-    year = snakemake.wildcards.planning_horizons
-    if int(year) not in df.columns.get_level_values(0):
+    year = int(snakemake.wildcards.planning_horizons)
+    if year not in df.columns.get_level_values(0):
         logger.info(f"No CCL data for year {year}, skipping.")
         return
 
-    # Slice year safely (keeps min/max if present)
-    df_y = df[int(year)]
-
-    if not isinstance(df_y, pd.DataFrame) or df_y.empty:
+    df_y = df[year]
+    if df_y.empty:
         logger.info(f"Empty CCL table for year {year}, skipping.")
         return
 
-    logger.info(f"Adding per-carrier generation capacity constraints for year {year}")
+    logger.info(f"Adding CCL constraints for year {year}")
 
     gen_country = n.generators.bus.map(n.buses.country)
 
@@ -1027,52 +1025,30 @@ def add_CCL_constraints(n, config):
         .p_nom.apply(join_exprs)
     )
 
-    # ---------- MIN ----------
     if "min" in df_y.columns:
-        minimum = df_y["min"].dropna()
-        if not minimum.empty:
-            adj_min = minimum.copy()
-            for idx in minimum.index:
-                adj_min[idx] = max(
-                    0.0,
-                    minimum[idx] - existing_capacity_per_cc.get(idx, 0.0),
-                )
-
-            adj_min = adj_min[adj_min > 0]
-            idx = p_nom_per_cc.index.intersection(adj_min.index)
-
+        mins = df_y["min"].dropna()
+        if not mins.empty:
+            adj = mins.copy()
+            for i in mins.index:
+                adj[i] = max(0.0, mins[i] - existing_capacity_per_cc.get(i, 0.0))
+            adj = adj[adj > 0]
+            idx = p_nom_per_cc.index.intersection(adj.index)
             if not idx.empty:
                 define_constraints(
-                    n,
-                    p_nom_per_cc[idx],
-                    ">=",
-                    adj_min[idx],
-                    "agg_p_nom",
-                    "min",
+                    n, p_nom_per_cc[idx], ">=", adj[idx], "agg_p_nom", "min"
                 )
 
-    # ---------- MAX ----------
     if "max" in df_y.columns:
-        maximum = df_y["max"].dropna()
-        if not maximum.empty:
-            adj_max = maximum.copy()
-            for idx in maximum.index:
-                adj_max[idx] = max(
-                    0.0,
-                    maximum[idx] - existing_capacity_per_cc.get(idx, 0.0),
-                )
-
-            adj_max = adj_max[adj_max > 0]
-            idx = p_nom_per_cc.index.intersection(adj_max.index)
-
+        maxs = df_y["max"].dropna()
+        if not maxs.empty:
+            adj = maxs.copy()
+            for i in maxs.index:
+                adj[i] = max(0.0, maxs[i] - existing_capacity_per_cc.get(i, 0.0))
+            adj = adj[adj > 0]
+            idx = p_nom_per_cc.index.intersection(adj.index)
             if not idx.empty:
                 define_constraints(
-                    n,
-                    p_nom_per_cc[idx],
-                    "<=",
-                    adj_max[idx],
-                    "agg_p_nom",
-                    "max",
+                    n, p_nom_per_cc[idx], "<=", adj[idx], "agg_p_nom", "max"
                 )
 
 
