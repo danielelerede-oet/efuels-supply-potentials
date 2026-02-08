@@ -976,21 +976,35 @@ def add_RPS_constraints(network, config_file):
 
 def add_CCL_constraints(n, config):
     agg_p_nom_limits = config["electricity"].get("agg_p_nom_limits")
+    if agg_p_nom_limits is None:
+        return
 
     try:
-        agg_p_nom_minmax = pd.read_csv(
-            agg_p_nom_limits, index_col=list(range(2)), header=[0, 1]
-        )[snakemake.wildcards.planning_horizons]
+        df = pd.read_csv(
+            agg_p_nom_limits,
+            index_col=[0, 1],  # (country, carrier)
+            header=[0, 1],  # (year, min/max)
+        )
     except IOError:
         logger.exception(
-            "Need to specify the path to a .csv file containing "
-            "aggregate capacity limits per country in "
-            "config['electricity']['agg_p_nom_limit']."
+            "Failed to read aggregate capacity limits CSV "
+            "(config['electricity']['agg_p_nom_limits'])."
         )
         return
-    logger.info(
-        "Adding per carrier generation capacity constraints for individual countries"
-    )
+
+    year = snakemake.wildcards.planning_horizons
+    if int(year) not in df.columns.get_level_values(0):
+        logger.info(f"No CCL data for year {year}, skipping.")
+        return
+
+    # Slice year safely (keeps min/max if present)
+    df_y = df[int(year)]
+
+    if not isinstance(df_y, pd.DataFrame) or df_y.empty:
+        logger.info(f"Empty CCL table for year {year}, skipping.")
+        return
+
+    logger.info(f"Adding per-carrier generation capacity constraints for year {year}")
 
     gen_country = n.generators.bus.map(n.buses.country)
 
@@ -1013,55 +1027,53 @@ def add_CCL_constraints(n, config):
         .p_nom.apply(join_exprs)
     )
 
-    # MIN constraint
-    if "min" in agg_p_nom_minmax.columns:
-        minimum = agg_p_nom_minmax["min"].dropna()
-    else:
-        minimum = pd.Series(dtype=float)
+    # ---------- MIN ----------
+    if "min" in df_y.columns:
+        minimum = df_y["min"].dropna()
+        if not minimum.empty:
+            adj_min = minimum.copy()
+            for idx in minimum.index:
+                adj_min[idx] = max(
+                    0.0,
+                    minimum[idx] - existing_capacity_per_cc.get(idx, 0.0),
+                )
 
-    if not minimum.empty:
-        adjusted_minimum = minimum.copy()
-        for idx in minimum.index:
-            existing_cap = existing_capacity_per_cc.get(idx, 0.0)
-            adjusted_minimum[idx] = max(0.0, minimum[idx] - existing_cap)
+            adj_min = adj_min[adj_min > 0]
+            idx = p_nom_per_cc.index.intersection(adj_min.index)
 
-        adjusted_minimum = adjusted_minimum[adjusted_minimum > 0]
-        available = p_nom_per_cc.index.intersection(adjusted_minimum.index)
+            if not idx.empty:
+                define_constraints(
+                    n,
+                    p_nom_per_cc[idx],
+                    ">=",
+                    adj_min[idx],
+                    "agg_p_nom",
+                    "min",
+                )
 
-        if not available.empty:
-            define_constraints(
-                n,
-                p_nom_per_cc[available],
-                ">=",
-                adjusted_minimum[available],
-                "agg_p_nom",
-                "min",
-            )
+    # ---------- MAX ----------
+    if "max" in df_y.columns:
+        maximum = df_y["max"].dropna()
+        if not maximum.empty:
+            adj_max = maximum.copy()
+            for idx in maximum.index:
+                adj_max[idx] = max(
+                    0.0,
+                    maximum[idx] - existing_capacity_per_cc.get(idx, 0.0),
+                )
 
-    # MAX constraint
-    if "max" in agg_p_nom_minmax.columns:
-        maximum = agg_p_nom_minmax["max"].dropna()
-    else:
-        maximum = pd.Series(dtype=float)
+            adj_max = adj_max[adj_max > 0]
+            idx = p_nom_per_cc.index.intersection(adj_max.index)
 
-    if not maximum.empty:
-        adjusted_maximum = maximum.copy()
-        for idx in maximum.index:
-            existing_cap = existing_capacity_per_cc.get(idx, 0.0)
-            adjusted_maximum[idx] = max(0.0, maximum[idx] - existing_cap)
-
-        adjusted_maximum = adjusted_maximum[adjusted_maximum > 0]
-        available = p_nom_per_cc.index.intersection(adjusted_maximum.index)
-
-        if not available.empty:
-            define_constraints(
-                n,
-                p_nom_per_cc[available],
-                "<=",
-                adjusted_maximum[available],
-                "agg_p_nom",
-                "max",
-            )
+            if not idx.empty:
+                define_constraints(
+                    n,
+                    p_nom_per_cc[idx],
+                    "<=",
+                    adj_max[idx],
+                    "agg_p_nom",
+                    "max",
+                )
 
 
 def add_H2_production_constraints(n, config):
