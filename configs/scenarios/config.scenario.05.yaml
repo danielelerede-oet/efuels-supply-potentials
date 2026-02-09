@@ -77,7 +77,6 @@ cluster_options:
     p_threshold_drop_isolated: 0.0
 
 electricity:
-  agg_p_nom_limits: data/agg_p_nom_minmax.csv
   extendable_carriers:
     Generator: [solar, onwind, offwind-ac, offwind-dc, csp, geothermal, nuclear, OCGT, CCGT, biomass]
     Store: [battery, H2]
@@ -113,7 +112,6 @@ policy_config:
     additionality: false
     temporal_matching_carriers: [csp, solar, onwind, offwind-ac, offwind-dc, ror, hydro, nuclear]
     h2_cap: true
-    agg_h2_production_limits: data/h2_production_minmax.csv
 
 demand_data:
   base_year: 2021

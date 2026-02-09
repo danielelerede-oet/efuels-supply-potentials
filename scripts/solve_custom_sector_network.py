@@ -974,22 +974,20 @@ def add_RPS_constraints(network, config_file):
             )
 
 
-def add_CCL_constraints(n, config):
-    agg_p_nom_limits = config["electricity"].get("agg_p_nom_limits")
-    if agg_p_nom_limits is None:
+def add_CCL_constraints(n, config, snakemake):
+    csv_path = snakemake.input.get("agg_p_nom_minmax")
+    if csv_path is None:
+        logger.info("No agg_p_nom_minmax input provided, skipping CCL constraints.")
         return
 
     try:
         df = pd.read_csv(
-            agg_p_nom_limits,
+            csv_path,
             index_col=[0, 1],  # (country, carrier)
             header=[0, 1],  # (year, min/max)
         )
-    except IOError:
-        logger.exception(
-            "Failed to read aggregate capacity limits CSV "
-            "(config['electricity']['agg_p_nom_limits'])."
-        )
+    except Exception:
+        logger.exception("Failed to read aggregate capacity limits CSV.")
         return
 
     year = int(snakemake.wildcards.planning_horizons)
@@ -998,7 +996,7 @@ def add_CCL_constraints(n, config):
         return
 
     df_y = df[year]
-    if df_y.empty:
+    if not isinstance(df_y, pd.DataFrame) or df_y.empty:
         logger.info(f"Empty CCL table for year {year}, skipping.")
         return
 
@@ -1025,6 +1023,7 @@ def add_CCL_constraints(n, config):
         .p_nom.apply(join_exprs)
     )
 
+    # MIN constraint
     if "min" in df_y.columns:
         mins = df_y["min"].dropna()
         if not mins.empty:
@@ -1038,6 +1037,7 @@ def add_CCL_constraints(n, config):
                     n, p_nom_per_cc[idx], ">=", adj[idx], "agg_p_nom", "min"
                 )
 
+    # MAX constraint
     if "max" in df_y.columns:
         maxs = df_y["max"].dropna()
         if not maxs.empty:
@@ -1052,30 +1052,40 @@ def add_CCL_constraints(n, config):
                 )
 
 
-def add_H2_production_constraints(n, config):
+def add_H2_production_constraints(n, config, snakemake):
     """
     Add annual H2 production min/max constraints for electrolysis.
 
     Expected CSV format:
-      - columns: country, carrier, then MultiIndex columns (year, {min,max})
+      - index: (country, carrier)
+      - columns: MultiIndex (year, {min,max})
       - values: MWh_H2 per year
     """
-    hydrogen_cfg = config["policy_config"]["hydrogen"]
-    path = hydrogen_cfg.get("agg_h2_production_limits")
 
-    if path is None:
-        raise RuntimeError("policy_config.hydrogen.agg_h2_production_limits not set")
+    csv_path = snakemake.input.get("h2_cap_csv")
+    if csv_path is None:
+        logger.info(
+            "No H2 production cap CSV provided, skipping H2 production constraints."
+        )
+        return
 
     year = int(snakemake.wildcards.planning_horizons)
 
     try:
-        df = pd.read_csv(path, header=[0, 1])
+        df = pd.read_csv(csv_path, header=[0, 1])
         df = df.set_index(["country", "carrier"])
-        df = df[year]
     except Exception as e:
-        raise RuntimeError(f"Failed to read H2 production limits CSV: {path}") from e
+        raise RuntimeError(
+            f"Failed to read H2 production limits CSV: {csv_path}"
+        ) from e
 
-    if df.empty:
+    if year not in df.columns.get_level_values(0):
+        logger.info(f"No H2 production cap data for year {year}, skipping.")
+        return
+
+    df_y = df[year]
+    if df_y.empty:
+        logger.info(f"Empty H2 production cap table for year {year}, skipping.")
         return
 
     # logical carrier used in CSV
@@ -1093,13 +1103,16 @@ def add_H2_production_constraints(n, config):
 
     el_links = n.links.index[n.links.carrier.isin(ELECTROLYSIS_CARRIERS)]
     if el_links.empty or ("Link", "p") not in n.variables.index:
+        logger.info(
+            "No electrolyzer links or variables found, skipping H2 production constraints."
+        )
         return
 
     p_el = get_var(n, "Link", "p")[el_links]
 
     # snapshot weighting to annual energy
     w = pd.DataFrame(
-        np.outer(n.snapshot_weightings["generators"], [1.0] * len(el_links)),
+        np.outer(n.snapshot_weightings["generators"], np.ones(len(el_links))),
         index=n.snapshots,
         columns=el_links,
     )
@@ -1124,8 +1137,8 @@ def add_H2_production_constraints(n, config):
     )
 
     # MIN constraint
-    if "min" in df.columns:
-        mins = df["min"].dropna()
+    if "min" in df_y.columns:
+        mins = df_y["min"].dropna()
         idx = h2_out_per_cc.index.intersection(mins.index)
 
         if not idx.empty:
@@ -1139,8 +1152,8 @@ def add_H2_production_constraints(n, config):
             )
 
     # MAX constraint
-    if "max" in df.columns:
-        maxs = df["max"].dropna()
+    if "max" in df_y.columns:
+        maxs = df_y["max"].dropna()
         idx = h2_out_per_cc.index.intersection(maxs.index)
 
         if not idx.empty:
@@ -2090,10 +2103,10 @@ def extra_functionality(n, snapshots):
     if "SAFE" in opts and n.generators.p_nom_extendable.any():
         add_SAFE_constraints(n, config)
     if "CCL" in opts and n.generators.p_nom_extendable.any():
-        add_CCL_constraints(n, config)
+        add_CCL_constraints(n, config, snakemake)
     # Annual H2 production cap
     if config["policy_config"]["hydrogen"].get("h2_cap", False):
-        add_H2_production_constraints(n, config)
+        add_H2_production_constraints(n, config, snakemake)
     reserve = config["electricity"].get("operational_reserve", {})
     if reserve.get("activate"):
         add_operational_reserve_margin(n, snapshots, config)

@@ -843,6 +843,7 @@ if config["foresight"] == "myopic":
             + RDIR
             + "costs_{planning_horizons}.csv",
             configs=PYPSA_EARTH_DIR + SDIR + "configs/config.yaml",  # included to trigger copy_config rule
+            agg_p_nom_minmax="data/agg_p_nom_minmax.csv",
             h2_cap_csv="data/h2_production_minmax.csv",
         output:
             network=PYPSA_EARTH_DIR
