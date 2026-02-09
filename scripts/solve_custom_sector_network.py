@@ -975,20 +975,14 @@ def add_RPS_constraints(network, config_file):
 
 
 def add_CCL_constraints(n, snakemake):
-    csv_path = snakemake.input.get("agg_p_nom_minmax")
-    if csv_path is None:
-        logger.info("No agg_p_nom_minmax input provided, skipping CCL constraints.")
-        return
+    csv_path = snakemake.input.agg_p_nom_minmax
+    logger.info(f"Reading CCL limits from {csv_path}")
 
-    try:
-        df = pd.read_csv(
-            csv_path,
-            index_col=[0, 1],  # (country, carrier)
-            header=[0, 1],  # (year, min/max)
-        )
-    except Exception:
-        logger.exception("Failed to read aggregate capacity limits CSV.")
-        return
+    df = pd.read_csv(
+        csv_path,
+        index_col=[0, 1],  # (country, carrier)
+        header=[0, 1],  # (year, min/max)
+    )
 
     year = int(snakemake.wildcards.planning_horizons)
     if year not in df.columns.get_level_values(0):
@@ -996,7 +990,7 @@ def add_CCL_constraints(n, snakemake):
         return
 
     df_y = df[year]
-    if not isinstance(df_y, pd.DataFrame) or df_y.empty:
+    if df_y.empty:
         logger.info(f"Empty CCL table for year {year}, skipping.")
         return
 
@@ -1062,12 +1056,13 @@ def add_H2_production_constraints(n, snakemake):
       - values: MWh_H2 per year
     """
 
-    csv_path = snakemake.input.get("h2_cap_csv")
-    if csv_path is None:
+    if not hasattr(snakemake.input, "h2_cap_csv"):
         logger.info(
             "No H2 production cap CSV provided, skipping H2 production constraints."
         )
         return
+    csv_path = snakemake.input.h2_cap_csv
+    logger.info(f"Reading H2 production caps from {csv_path}")
 
     year = int(snakemake.wildcards.planning_horizons)
 
