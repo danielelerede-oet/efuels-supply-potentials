@@ -110,10 +110,16 @@ def get_dynamic_blending_rate(config):
     Extract the blending rate from data/saf_blending_rates/saf_scenarios.csv based on the planning horizon
     and the scenario specified in the config file (EU, EU+ or EU-)
     """
-    saf_scenario = snakemake.params.saf_scenario
-    year = str(snakemake.wildcards.planning_horizons)  # e.g. 2030 -> "2030"
+    saf_scenario = config["saf_mandate"]["saf_scenario"]
+    year = str(snakemake.wildcards.planning_horizons)
     csv_path = snakemake.input.saf_scenarios
+
     df = pd.read_csv(csv_path, index_col=0)
+
+    if saf_scenario not in df.index:
+        raise ValueError(
+            f"Invalid SAF scenario '{saf_scenario}'. Expected one of {list(df.index)}"
+        )
 
     rate = df.loc[saf_scenario, year]
 
