@@ -587,6 +587,10 @@ if config["saf_mandate"]["ekerosene_split"]:
 
 saf_suffix = "_saf" if config["saf_mandate"]["ekerosene_split"] else ""
 
+if config["demand_distribution"]["set_custom_distribution_fees"]:
+    prenetwork_suffix = "_distribution_fees"
+else:
+    prenetwork_suffix = ""
 
 if config["custom_industry"]["enable"]:
 
@@ -649,7 +653,12 @@ if config["custom_industry"]["enable"]:
             + "resources/"
             + SECDIR
             + "energy_totals_{demand}_{planning_horizons}.csv",
-            network=lambda w: f"{PYPSA_EARTH_DIR}results/{SECDIR}prenetworks/elec_s{w.simpl}_{w.clusters}_ec_l{w.ll}_{w.opts}_{w.sopts}_{w.planning_horizons}_{w.discountrate}_{w.demand}{saf_suffix}.nc",
+            network=lambda w: (
+                f"{PYPSA_EARTH_DIR}results/{SECDIR}prenetworks/"
+                f"elec_s{w.simpl}_{w.clusters}_ec_l{w.ll}_{w.opts}_{w.sopts}_"
+                f"{w.planning_horizons}_{w.discountrate}_{w.demand}"
+                f"{prenetwork_suffix}{saf_suffix}.nc"
+            ),
             costs=PYPSA_EARTH_DIR
             + "resources/"
             + RDIR
@@ -880,25 +889,21 @@ if config["foresight"] == "myopic":
 
 if config["demand_distribution"]["set_custom_distribution_fees"]:
 
-    use rule prepare_sector_network from pypsa_earth with:
-        output:
-            PYPSA_EARTH_DIR
-            + RESDIR
-            + "prenetworks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{sopts}_{planning_horizons}_{discountrate}_{demand}_distribution_fees.nc",
-
     rule set_custom_distribution_fees:
         params:
             distance_crs=config["crs"]["distance_crs"],
         input:
             shape_path="data/EIA_market_module_regions/EMM_regions.geojson",
             regional_fees_path="data/EIA_market_module_regions/regional_fees.csv",
+            # INPUT = prenetwork standard
             network=PYPSA_EARTH_DIR
             + RESDIR
-            + "prenetworks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{sopts}_{planning_horizons}_{discountrate}_{demand}_distribution_fees.nc",
+            + "prenetworks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{sopts}_{planning_horizons}_{discountrate}_{demand}.nc",
         output:
+            # OUTPUT = prenetwork con distribution fees
             PYPSA_EARTH_DIR
             + RESDIR
-            + "prenetworks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{sopts}_{planning_horizons}_{discountrate}_{demand}.nc",
+            + "prenetworks/elec_s{simpl}_{clusters}_ec_l{ll}_{opts}_{sopts}_{planning_horizons}_{discountrate}_{demand}_distribution_fees.nc",
         script:
             "scripts/set_custom_distribution_fees.py"
 
