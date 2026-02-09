@@ -974,7 +974,7 @@ def add_RPS_constraints(network, config_file):
             )
 
 
-def add_CCL_constraints(n, config, snakemake):
+def add_CCL_constraints(n, snakemake):
     csv_path = snakemake.input.get("agg_p_nom_minmax")
     if csv_path is None:
         logger.info("No agg_p_nom_minmax input provided, skipping CCL constraints.")
@@ -1052,7 +1052,7 @@ def add_CCL_constraints(n, config, snakemake):
                 )
 
 
-def add_H2_production_constraints(n, config, snakemake):
+def add_H2_production_constraints(n, snakemake):
     """
     Add annual H2 production min/max constraints for electrolysis.
 
@@ -2103,10 +2103,10 @@ def extra_functionality(n, snapshots):
     if "SAFE" in opts and n.generators.p_nom_extendable.any():
         add_SAFE_constraints(n, config)
     if "CCL" in opts and n.generators.p_nom_extendable.any():
-        add_CCL_constraints(n, config, snakemake)
+        add_CCL_constraints(n, snakemake)
     # Annual H2 production cap
     if config["policy_config"]["hydrogen"].get("h2_cap", False):
-        add_H2_production_constraints(n, config, snakemake)
+        add_H2_production_constraints(n, snakemake)
     reserve = config["electricity"].get("operational_reserve", {})
     if reserve.get("activate"):
         add_operational_reserve_margin(n, snapshots, config)
