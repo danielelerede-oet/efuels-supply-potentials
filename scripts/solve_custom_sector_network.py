@@ -984,7 +984,7 @@ def add_CCL_constraints(n, snakemake):
         header=[0, 1],  # (year, min/max)
     )
 
-    year = int(snakemake.wildcards.planning_horizons)
+    year = str(snakemake.wildcards.planning_horizons)
     if year not in df.columns.get_level_values(0):
         logger.info(f"No CCL data for year {year}, skipping.")
         return
@@ -1050,29 +1050,26 @@ def add_H2_production_constraints(n, snakemake):
     """
     Add annual H2 production min/max constraints for electrolysis.
 
-    Expected CSV format:
+    CSV format:
       - index: (country, carrier)
       - columns: MultiIndex (year, {min,max})
       - values: MWh_H2 per year
     """
 
     if not hasattr(snakemake.input, "h2_cap_csv"):
-        logger.info(
-            "No H2 production cap CSV provided, skipping H2 production constraints."
-        )
+        logger.info("No H2 production cap CSV provided, skipping.")
         return
+
     csv_path = snakemake.input.h2_cap_csv
     logger.info(f"Reading H2 production caps from {csv_path}")
 
-    year = int(snakemake.wildcards.planning_horizons)
+    year = str(snakemake.wildcards.planning_horizons)
 
-    try:
-        df = pd.read_csv(csv_path, header=[0, 1])
-        df = df.set_index(["country", "carrier"])
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to read H2 production limits CSV: {csv_path}"
-        ) from e
+    df = pd.read_csv(
+        csv_path,
+        index_col=[0, 1],  # country, carrier
+        header=[0, 1],  # year, min/max
+    )
 
     if year not in df.columns.get_level_values(0):
         logger.info(f"No H2 production cap data for year {year}, skipping.")
@@ -1083,10 +1080,8 @@ def add_H2_production_constraints(n, snakemake):
         logger.info(f"Empty H2 production cap table for year {year}, skipping.")
         return
 
-    # logical carrier used in CSV
     logical_carrier = "h2_electrolysis"
 
-    # physical electrolyzer carriers in the model
     ELECTROLYSIS_CARRIERS = [
         "Alkaline electrolyzer large",
         "Alkaline electrolyzer medium",
@@ -1098,14 +1093,11 @@ def add_H2_production_constraints(n, snakemake):
 
     el_links = n.links.index[n.links.carrier.isin(ELECTROLYSIS_CARRIERS)]
     if el_links.empty or ("Link", "p") not in n.variables.index:
-        logger.info(
-            "No electrolyzer links or variables found, skipping H2 production constraints."
-        )
+        logger.info("No electrolyzer links or variables found, skipping.")
         return
 
     p_el = get_var(n, "Link", "p")[el_links]
 
-    # snapshot weighting to annual energy
     w = pd.DataFrame(
         np.outer(n.snapshot_weightings["generators"], np.ones(len(el_links))),
         index=n.snapshots,
@@ -1114,7 +1106,6 @@ def add_H2_production_constraints(n, snakemake):
 
     eff = n.links.loc[el_links, "efficiency"]
 
-    # annual H2 output per link (MWh_H2/year)
     h2_out_links = linexpr((w * eff, p_el)).sum(axis=0)
 
     el_country = n.buses.loc[n.links.loc[el_links, "bus0"], "country"]
@@ -1131,35 +1122,19 @@ def add_H2_production_constraints(n, snakemake):
         .apply(join_exprs)
     )
 
-    # MIN constraint
+    # MIN
     if "min" in df_y.columns:
         mins = df_y["min"].dropna()
         idx = h2_out_per_cc.index.intersection(mins.index)
-
         if not idx.empty:
-            define_constraints(
-                n,
-                h2_out_per_cc[idx],
-                ">=",
-                mins[idx],
-                "h2_prod",
-                "min",
-            )
+            define_constraints(n, h2_out_per_cc[idx], ">=", mins[idx], "h2_prod", "min")
 
-    # MAX constraint
+    # MAX
     if "max" in df_y.columns:
         maxs = df_y["max"].dropna()
         idx = h2_out_per_cc.index.intersection(maxs.index)
-
         if not idx.empty:
-            define_constraints(
-                n,
-                h2_out_per_cc[idx],
-                "<=",
-                maxs[idx],
-                "h2_prod",
-                "max",
-            )
+            define_constraints(n, h2_out_per_cc[idx], "<=", maxs[idx], "h2_prod", "max")
 
 
 def add_EQ_constraints(n, o, scaling=1e-1):
