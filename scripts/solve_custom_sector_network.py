@@ -1059,6 +1059,96 @@ def add_CCL_constraints(n, config):
                 )
 
 
+def add_H2_production_constraints(n, snakemake):
+    """
+    Add annual H2 production min/max constraints for electrolysis.
+    CSV format:
+      - index: (country, carrier)
+      - columns: MultiIndex (year, {min,max})
+      - values: MWh_H2 per year
+    """
+
+    if not hasattr(snakemake.input, "h2_cap_csv"):
+        logger.info("No H2 production cap CSV provided, skipping.")
+        return
+
+    csv_path = snakemake.input.h2_cap_csv
+    logger.info(f"Reading H2 production caps from {csv_path}")
+
+    year = str(snakemake.wildcards.planning_horizons)
+
+    df = pd.read_csv(
+        csv_path,
+        index_col=[0, 1],  # country, carrier
+        header=[0, 1],  # year, min/max
+    )
+
+    if year not in df.columns.get_level_values(0):
+        logger.info(f"No H2 production cap data for year {year}, skipping.")
+        return
+
+    df_y = df[year]
+    if df_y.empty:
+        logger.info(f"Empty H2 production cap table for year {year}, skipping.")
+        return
+
+    logical_carrier = "h2_electrolysis"
+
+    ELECTROLYSIS_CARRIERS = [
+        "Alkaline electrolyzer large",
+        "Alkaline electrolyzer medium",
+        "Alkaline electrolyzer small",
+        "PEM electrolyzer",
+        "SOEC",
+        "Flexible electrolyzer",
+    ]
+
+    el_links = n.links.index[n.links.carrier.isin(ELECTROLYSIS_CARRIERS)]
+    if el_links.empty or ("Link", "p") not in n.variables.index:
+        logger.info("No electrolyzer links or variables found, skipping.")
+        return
+
+    p_el = get_var(n, "Link", "p")[el_links]
+
+    w = pd.DataFrame(
+        np.outer(n.snapshot_weightings["generators"], np.ones(len(el_links))),
+        index=n.snapshots,
+        columns=el_links,
+    )
+
+    eff = n.links.loc[el_links, "efficiency"]
+
+    h2_out_links = linexpr((w * eff, p_el)).sum(axis=0)
+
+    el_country = n.buses.loc[n.links.loc[el_links, "bus0"], "country"]
+
+    h2_out_per_cc = (
+        pd.DataFrame(
+            {
+                "expr": h2_out_links,
+                "country": el_country,
+                "carrier": logical_carrier,
+            }
+        )
+        .groupby(["country", "carrier"])["expr"]
+        .apply(join_exprs)
+    )
+
+    # MIN
+    if "min" in df_y.columns:
+        mins = df_y["min"].dropna()
+        idx = h2_out_per_cc.index.intersection(mins.index)
+        if not idx.empty:
+            define_constraints(n, h2_out_per_cc[idx], ">=", mins[idx], "h2_prod", "min")
+
+    # MAX
+    if "max" in df_y.columns:
+        maxs = df_y["max"].dropna()
+        idx = h2_out_per_cc.index.intersection(maxs.index)
+        if not idx.empty:
+            define_constraints(n, h2_out_per_cc[idx], "<=", maxs[idx], "h2_prod", "max")
+
+
 def add_EQ_constraints(n, o, scaling=1e-1):
     float_regex = "[0-9]*\.?[0-9]+"
     level = float(re.findall(float_regex, o)[0])
@@ -1994,8 +2084,12 @@ def extra_functionality(n, snapshots):
         add_BAU_constraints(n, config)
     if "SAFE" in opts and n.generators.p_nom_extendable.any():
         add_SAFE_constraints(n, config)
+    # Annual electricity generation installed capacity cap
     if "CCL" in opts and n.generators.p_nom_extendable.any():
         add_CCL_constraints(n, config)
+    # Annual H2 production cap
+    if config["policy_config"]["hydrogen"].get("h2_cap", False):
+        add_H2_production_constraints(n, snakemake)
     reserve = config["electricity"].get("operational_reserve", {})
     if reserve.get("activate"):
         add_operational_reserve_margin(n, snapshots, config)
@@ -2172,9 +2266,13 @@ if __name__ == "__main__":
     # Set transmission limits for scenario 5 and 6
     if snakemake.config.get("line_expansion_limits", None):
         # Get expansion limit for selected planning horizon
-        ll_expansion_limit = snakemake.config["line_expansion_limits"][int(snakemake.wildcards.planning_horizons)]
+        ll_expansion_limit = snakemake.config["line_expansion_limits"][
+            int(snakemake.wildcards.planning_horizons)
+        ]
         ll_type, factor = ll_expansion_limit[0], ll_expansion_limit[1:]
-        set_transmission_limit(n, ll_type=ll_type, factor=factor, costs=costs, Nyears=Nyears)
+        set_transmission_limit(
+            n, ll_type=ll_type, factor=factor, costs=costs, Nyears=Nyears
+        )
 
     n = solve_network(
         n,
